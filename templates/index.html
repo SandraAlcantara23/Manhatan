@@ -1,0 +1,283 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>GPS con Modelo Manhattan</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.3/dist/leaflet.css" />
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 20px;
+            background-color: #f4f4f4;
+        }
+        h1 {
+            text-align: center;
+            color: #333;
+        }
+        #controls-container {
+            display: flex;
+            flex-wrap: wrap;
+            justify-content: center;
+            gap: 20px;
+            background-color: #fff;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .control-group {
+            display: flex;
+            flex-direction: column;
+            gap: 5px;
+        }
+        label {
+            font-weight: bold;
+        }
+        select, button {
+            padding: 8px;
+            border-radius: 4px;
+            border: 1px solid #ccc;
+        }
+        button {
+            background-color: #007bff;
+            color: white;
+            cursor: pointer;
+            border: none;
+            transition: background-color 0.3s;
+        }
+        button:hover {
+            background-color: #0056b3;
+        }
+        #map {
+            height: 550px;
+            width: 100%;
+            margin-top: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        #resultado {
+            margin-top: 15px;
+            padding: 15px;
+            background-color: #e9ecef;
+            border-radius: 8px;
+        }
+        #poi-controls {
+            margin-top: 15px;
+            padding: 15px;
+            background-color: #fff;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        #poi-controls label {
+            margin-right: 15px;
+            font-weight: normal;
+        }
+    </style>
+</head>
+<body>
+
+    <h1>GPS con Modelo Manhattan:</h1>
+
+    <div id="controls-container">
+        <div class="control-group">
+            <label for="origen">Origen:</label>
+            <select id="origen"></select>
+        </div>
+
+        <div class="control-group">
+            <label for="destino">Destino:</label>
+            <select id="destino"></select>
+        </div>
+
+        <div class="control-group">
+            <label for="modelo">Modelo de Ruta:</label>
+            <select id="modelo">
+                <option value="osrm" selected>Ruta real (OSRM)</option>
+                <option value="manhattan">Modelo Manhattan</option>
+            </select>
+        </div>
+        
+        <div class="control-group">
+             <label>&nbsp;</label> <button type="button" id="calcular">Calcular Ruta</button>
+        </div>
+    </div>
+
+    <div id="poi-controls">
+        <p><strong>Mostrar Puntos de Interés cerca del destino (radio de 5km):</strong></p>
+        <label><input type="checkbox" name="poi" value="hospitales"> Hospitales</label>
+        <label><input type="checkbox" name="poi" value="escuelas"> Escuelas</label>
+        <label><input type="checkbox" name="poi" value="restaurantes"> Restaurantes</label>
+        <label><input type="checkbox" name="poi" value="gasolineras"> Gasolineras</label>
+        <label><input type="checkbox" name="poi" value="tiendas"> Tiendas</label>
+    </div>
+
+    <div id="resultado"></div>
+    <div id="map"></div>
+
+    <script src="https://unpkg.com/leaflet@1.9.3/dist/leaflet.js"></script>
+    <script>
+        const estados = [
+            "Aguascalientes", "Baja California", "Campeche", "Chiapas", "Chihuahua",
+            "Ciudad de México", "Durango", "Guanajuato", "Guerrero", "Hidalgo",
+            "Jalisco", "México", "Michoacán", "Morelos", "Nayarit", "Nuevo León",
+            "Oaxaca", "Puebla", "Querétaro", "Quintana Roo", "San Luis Potosí",
+            "Sinaloa", "Sonora", "Tabasco", "Tamaulipas", "Tlaxcala", "Veracruz",
+            "Yucatán", "Zacatecas"
+        ];
+
+        const origenSelect = document.getElementById("origen");
+        const destinoSelect = document.getElementById("destino");
+
+        estados.forEach(estado => {
+            const option1 = document.createElement("option");
+            option1.value = estado;
+            option1.textContent = estado;
+            origenSelect.appendChild(option1);
+
+            const option2 = document.createElement("option");
+            option2.value = estado;
+            option2.textContent = estado;
+            destinoSelect.appendChild(option2);
+        });
+
+        origenSelect.value = "Ciudad de México";
+        destinoSelect.value = "Querétaro";
+
+        const map = L.map("map").setView([23.6345, -102.5528], 5);
+
+        L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+            maxZoom: 18,
+            attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+        }).addTo(map);
+
+        let routeFeatureGroup = L.featureGroup().addTo(map);
+        let poiLayerGroup = L.layerGroup().addTo(map);
+
+        const redIcon = new L.Icon({
+            iconUrl: 'https://cdn.rawgit.com/pointhi/leaflet-color-markers/master/img/marker-icon-2x-red.png',
+            shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/0.7.7/images/marker-shadow.png',
+            iconSize: [25, 41],
+            iconAnchor: [12, 41],
+            popupAnchor: [1, -34],
+            shadowSize: [41, 41]
+        });
+
+        function formatMinutesToHoursMinutes(totalMinutes) {
+            const hours = Math.floor(totalMinutes / 60);
+            const minutes = Math.round(totalMinutes % 60);
+            if (hours > 0) {
+                return `${hours} hora(s) ${minutes} minuto(s)`;
+            } else {
+                return `${minutes} minuto(s)`;
+            }
+        }
+
+        function buscarPois(destinoCoords) {
+            poiLayerGroup.clearLayers(); 
+            const poiCheckboxes = document.querySelectorAll('input[name="poi"]:checked');
+
+            poiCheckboxes.forEach(checkbox => {
+                const poiType = checkbox.value;
+                
+                fetch("/buscar_pois", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                        lat: destinoCoords.lat,
+                        lon: destinoCoords.lon,
+                        poi_type: poiType,
+                        radius: 5000
+                    })
+                })
+                .then(response => {
+                    if (!response.ok) {
+                        throw new Error(`Error en la respuesta del servidor: ${response.statusText}`);
+                    }
+                    return response.json();
+                })
+                .then(pois => {
+                    if (pois.error) {
+                        console.error(`Error buscando ${poiType}:`, pois.error);
+                        return;
+                    }
+                    pois.forEach(poi => {
+                        L.marker([poi.lat, poi.lon], {icon: redIcon})
+                          .bindPopup(`<strong>${poiType.charAt(0).toUpperCase() + poiType.slice(1, -1)}</strong><br>${poi.name}`)
+                          .addTo(poiLayerGroup);
+                    });
+                })
+                .catch(err => {
+                    console.error(`Error en la petición fetch para ${poiType}:`, err);
+                    alert(`No se pudieron cargar los puntos de interés para: ${poiType}`);
+                });
+            });
+        }
+        
+        document.getElementById("calcular").addEventListener("click", () => {
+            const origen = origenSelect.value;
+            const destino = destinoSelect.value;
+            const modelo = document.getElementById("modelo").value;
+
+            if (origen === destino) {
+                alert("El origen y el destino deben ser diferentes.");
+                return;
+            }
+
+            document.getElementById("resultado").innerHTML = "<p>Calculando ruta...</p>";
+
+            fetch("/calcular_ruta", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ origen, destino, modelo })
+            })
+            .then(response => {
+                if (!response.ok) {
+                    throw new Error('La respuesta de la red no fue exitosa.');
+                }
+                return response.json();
+            })
+            .then(data => {
+                if (data.error) {
+                    alert(data.error);
+                    document.getElementById("resultado").innerHTML = "";
+                    return;
+                }
+
+                routeFeatureGroup.clearLayers();
+                
+                const latlngs = data.ruta.map(p => [p.lat, p.lng]);
+                const polyline = L.polyline(latlngs, { color: 'blue', weight: 5 });
+                
+                routeFeatureGroup.addLayer(polyline);
+                L.marker([data.origen.lat, data.origen.lon]).bindPopup(`<b>Origen:</b> ${data.origen.estado}`).addTo(routeFeatureGroup);
+                L.marker([data.destino.lat, data.destino.lon]).bindPopup(`<b>Destino:</b> ${data.destino.estado}`).addTo(routeFeatureGroup);
+
+                map.fitBounds(routeFeatureGroup.getBounds().pad(0.1));
+
+                // Calculate travel times for different vehicles
+                const distancia_km = data.distancia_km;
+                const duracion_carro_min = distancia_km / 80 * 60; // 80 km/h average
+                const duracion_moto_min = distancia_km / 90 * 60; // 90 km/h average
+                const duracion_autobus_min = distancia_km / 60 * 60; // 60 km/h average
+
+                document.getElementById("resultado").innerHTML = `
+                    <p><strong>Origen:</strong> ${data.origen.estado} (Lat: ${data.origen.lat}, Lon: ${data.origen.lon})</p>
+                    <p><strong>Destino:</strong> ${data.destino.estado} (Lat: ${data.destino.lat}, Lon: ${data.destino.lon})</p>
+                    <p><strong>Distancia:</strong> ${distancia_km} km</p>
+                    <p><strong>Duración estimada (Ruta real - ${modelo === 'osrm' ? 'OSRM' : 'Manhattan'}):</strong> ${formatMinutesToHoursMinutes(data.duracion_min)}</p>
+                    <p><strong>Tiempo estimado en carro:</strong> ${formatMinutesToHoursMinutes(duracion_carro_min)}</p>
+                    <p><strong>Tiempo estimado en moto:</strong> ${formatMinutesToHoursMinutes(duracion_moto_min)}</p>
+                    <p><strong>Tiempo estimado en autobús:</strong> ${formatMinutesToHoursMinutes(duracion_autobus_min)}</p>
+                `;
+
+                buscarPois(data.destino);
+            })
+            .catch(err => {
+                console.error("Error al calcular la ruta:", err);
+                alert("Hubo un error al calcular la ruta. Revisa la consola del navegador para más detalles.");
+                document.getElementById("resultado").innerHTML = `<p style="color:red;">Error al calcular la ruta.</p>`;
+            });
+        });
+    </script>
+</body>
+</html>
